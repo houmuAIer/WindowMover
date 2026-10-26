@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>WindowMover</AssemblyName>
+    <RootNamespace>WindowMover</RootNamespace>
+    <Version>1.0.1</Version>
+    <AssemblyTitle>WindowMover</AssemblyTitle>
+    <Product>WindowMover</Product>
+    <Company>WindowMover</Company>
+    <!-- PerMonitorV2 DPI 対応と実行レベルはマニフェストで宣言する -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- x64 専用（SetWindowLongPtrW を使うため） -->
+    <PlatformTarget>x64</PlatformTarget>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <NoWarn>$(NoWarn);WFAC010</NoWarn>
+  </PropertyGroup>
+
+  <!--
+    UseWindowsForms を有効にすると System.Windows.Forms と System.Drawing が
+    暗黙の using に追加され、WPF の Application / Brush / KeyEventArgs 等と衝突する。
+    参照アセンブリは残したまま、暗黙の using からだけ除外する。
+    WinForms の型（NotifyIcon 等）は App.xaml.cs で Forms 別名と完全修飾名を使って参照している。
+  -->
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+</Project>
+
+

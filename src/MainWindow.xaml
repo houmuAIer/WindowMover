@@ -1,0 +1,119 @@
+<Window x:Class="WindowMover.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ウィンドウ一括移動"
+        Width="1200" Height="800"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        Topmost="True"
+        AllowsTransparency="False"
+        WindowStartupLocation="Manual"
+        UseLayoutRounding="True"
+        Background="#FF1B1B1F"
+        FontFamily="Yu Gothic UI, Meiryo UI, Segoe UI">
+
+    <!-- AllowsTransparency を True にするとレイヤードウィンドウになり、
+         DWM のサムネイルが描画されなくなるため必ず False のままにすること -->
+
+    <Window.Resources>
+        <Style x:Key="FlatButton" TargetType="Button">
+            <Setter Property="Background" Value="#FF2E2E36"/>
+            <Setter Property="Foreground" Value="#FFEFEFEF"/>
+            <Setter Property="BorderBrush" Value="#FF44444F"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="14,8"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="b" CornerRadius="5"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="#FF3C7DD9"/>
+                                <Setter TargetName="b" Property="BorderBrush" Value="#FF5C9BEF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Border BorderBrush="#FF3C3C46" BorderThickness="1">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- ヘッダー -->
+            <Grid Grid.Row="0" Background="#FF232329">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="18,14,10,14" VerticalAlignment="Center">
+                    <TextBlock Text="ウィンドウ一括移動" Foreground="White" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="CountText" Text="" Foreground="#FF9A9AA8" FontSize="12" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                </StackPanel>
+
+                <TextBox x:Name="SearchBox" Grid.Column="1"
+                         Margin="10,12,10,12" Padding="8,6" FontSize="13"
+                         Background="#FF16161A" Foreground="White" BorderBrush="#FF44444F" BorderThickness="1"
+                         VerticalContentAlignment="Center"
+                         ToolTip="ウィンドウ名・プロセス名で絞り込み"/>
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="10,12,14,12">
+                    <Button x:Name="SelectAllButton" Content="すべて選択 (Ctrl+A)" Style="{StaticResource FlatButton}"/>
+                    <Button x:Name="RefreshButton" Content="更新 (F5)" Style="{StaticResource FlatButton}"/>
+                    <Button x:Name="CloseButton" Content="閉じる (Esc)" Style="{StaticResource FlatButton}" Margin="0"/>
+                </StackPanel>
+            </Grid>
+
+            <!-- ウィンドウ一覧（矩形選択のオーバーレイを重ねる） -->
+            <Grid Grid.Row="1">
+                <ScrollViewer x:Name="Scroller"
+                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                              Background="#FF1B1B1F" Focusable="False">
+                    <WrapPanel x:Name="CardPanel" Margin="12" Orientation="Horizontal" Background="Transparent"/>
+                </ScrollViewer>
+
+                <Canvas x:Name="BandLayer" IsHitTestVisible="False" ClipToBounds="True">
+                    <Rectangle x:Name="Band"
+                               Visibility="Collapsed"
+                               Fill="#332F7BE0" Stroke="#FF5C9BEF" StrokeThickness="1"/>
+                </Canvas>
+            </Grid>
+
+            <!-- フッター（モニタ配置図） -->
+            <Grid Grid.Row="2" Background="#FF232329">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Text="移動先のモニタをクリック（数字キーでも指定できます）"
+                           Foreground="#FFEFEFEF" FontSize="13" Margin="18,12,18,0"/>
+
+                <Canvas x:Name="MonitorMap" Grid.Row="1" Height="168" Margin="18,8,18,4"
+                        Background="#FF1B1B1F"/>
+
+                <TextBlock x:Name="StatusText" Grid.Row="2"
+                           Foreground="#FF9A9AA8" FontSize="12" Margin="18,4,18,12"
+                           Text=""/>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>
