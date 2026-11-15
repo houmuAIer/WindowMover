@@ -26,6 +26,12 @@ public partial class MainWindow : Window
     private static readonly Brush MonBgPrimary = new SolidColorBrush(Color.FromRgb(0x1F, 0x4B, 0x82));
     private static readonly Brush MonBorder = new SolidColorBrush(Color.FromRgb(0x4A, 0x4A, 0x56));
     private static readonly Brush MonBorderHover = new SolidColorBrush(Color.FromRgb(0x5C, 0x9B, 0xEF));
+    private static readonly Brush MemoText = new SolidColorBrush(Color.FromRgb(0xFF, 0xD1, 0x66));
+    private static readonly Brush GroupText = new SolidColorBrush(Color.FromRgb(0x7F, 0xD1, 0xAE));
+    private static readonly Brush ChipBg = new SolidColorBrush(Color.FromRgb(0x24, 0x36, 0x2F));
+    private static readonly Brush ChipBorder = new SolidColorBrush(Color.FromRgb(0x3F, 0x6B, 0x57));
+    private static readonly Brush ChipBorderHover = new SolidColorBrush(Color.FromRgb(0x7F, 0xD1, 0xAE));
+    private static readonly Brush CloseHover = new SolidColorBrush(Color.FromRgb(0xD9, 0x58, 0x5C));
 
     private sealed class Card
     {
@@ -55,6 +61,15 @@ public partial class MainWindow : Window
     // モニタ配置図
     private readonly List<(MonitorItem Monitor, Border Box, TextBlock Badge)> _monitorBoxes = new();
 
+    // 位置の記憶・グループ（一覧の再取得ごとに照合し直す）
+    private HashSet<IntPtr> _rememberedHandles = new();
+    private readonly Dictionary<IntPtr, List<WindowGroup>> _groupsByHandle = new();
+    private readonly Dictionary<WindowGroup, List<WindowItem>> _groupPresent = new();
+
+    /// <summary>確認ダイアログ等を表示中は、フォーカスが外れても自動で閉じない。</summary>
+    private int _modalDepth;
+    private bool _isClosed;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -63,9 +78,16 @@ public partial class MainWindow : Window
         SelectAllButton.Click += (_, _) => SelectAll();
         RefreshButton.Click += (_, _) => ReloadAll();
         CloseButton.Click += (_, _) => Close();
+        GroupButton.Click += (_, _) => CreateGroupFromSelection();
+        RememberButton.Click += (_, _) => RememberSelected();
+        RestoreButton.Click += (_, _) => RestoreSelected();
+        CloseSelectedButton.Click += (_, _) => CloseWindows(SelectedItems());
         Scroller.ScrollChanged += (_, _) => UpdateThumbnails();
         SizeChanged += (_, _) => UpdateThumbnails();
-        Deactivated += (_, _) => Close();
+        Deactivated += (_, _) =>
+        {
+            if (_modalDepth == 0) Close();
+        };
         Closed += OnClosed;
 
         Scroller.MouseLeftButtonDown += OnEmptyAreaMouseDown;
@@ -118,7 +140,38 @@ public partial class MainWindow : Window
             _defaultTarget = _monitors.FirstOrDefault(m => m.Handle == _defaultTarget.Handle) ?? _monitors[0];
 
         _windows = WindowEnumerator.Enumerate(_monitors);
+        RefreshMemoryInfo();
         BuildMonitorMap();
+        BuildGroupBar();
+        BuildCards();
+    }
+
+    /// <summary>記憶・グループと、いま開いているウィンドウとの対応を取り直す。</summary>
+    private void RefreshMemoryInfo()
+    {
+        var state = StateStore.Current;
+        _rememberedHandles = WindowMatcher.Match(state.Windows, _windows).Values.Select(w => w.Handle).ToHashSet();
+
+        _groupsByHandle.Clear();
+        _groupPresent.Clear();
+        foreach (var g in state.Groups)
+        {
+            var present = WindowMatcher.Match(g.Members, _windows).Values.ToList();
+            _groupPresent[g] = present;
+            foreach (var w in present)
+            {
+                if (!_groupsByHandle.TryGetValue(w.Handle, out var list))
+                    _groupsByHandle[w.Handle] = list = new List<WindowGroup>();
+                list.Add(g);
+            }
+        }
+    }
+
+    /// <summary>記憶やグループを変更した後の再表示（選択状態は保つ）。</summary>
+    private void RefreshAfterMemoryChange()
+    {
+        RefreshMemoryInfo();
+        BuildGroupBar();
         BuildCards();
     }
 
@@ -231,6 +284,9 @@ public partial class MainWindow : Window
 
     private void BuildCards()
     {
+        // 再構築しても、表示が続くウィンドウの選択は保つ
+        var keep = _cards.Where(c => c.Selected).Select(c => c.Item.Handle).ToHashSet();
+
         ClearThumbnails();
         CardPanel.Children.Clear();
         _cards.Clear();
@@ -246,14 +302,14 @@ public partial class MainWindow : Window
         foreach (var item in shown)
         {
             var card = CreateCard(item);
+            card.Selected = keep.Contains(item.Handle);
             _cards.Add(card);
             CardPanel.Children.Add(card.Root);
         }
 
         CountText.Text = $"{shown.Count} / {_windows.Count} ウィンドウ";
         RegisterThumbnails();
-        UpdateStatus();
-        UpdateMonitorBadges();
+        RefreshSelectionVisual();
     }
 
     private Card CreateCard(WindowItem item)
@@ -308,13 +364,42 @@ public partial class MainWindow : Window
             Foreground = TextMain,
             FontSize = 12.5,
             TextTrimming = TextTrimming.CharacterEllipsis,
-            MaxWidth = ThumbWidth - 18,
             VerticalAlignment = VerticalAlignment.Center,
             ToolTip = item.Title
         };
 
-        var titleRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+        // ウィンドウを閉じるボタン（サムネイルの上は DWM が上書きするため、タイトル行の右端に置く）
+        var closeGlyph = new TextBlock
+        {
+            Text = "✕",
+            Foreground = TextSub,
+            FontSize = 12,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        var closeBtn = new Border
+        {
+            Width = 22,
+            Height = 20,
+            CornerRadius = new CornerRadius(3),
+            Background = Brushes.Transparent,
+            Margin = new Thickness(4, 0, 0, 0),
+            Child = closeGlyph,
+            ToolTip = "このウィンドウを閉じる"
+        };
+        closeBtn.MouseEnter += (_, _) => { closeBtn.Background = CloseHover; closeGlyph.Foreground = Brushes.White; };
+        closeBtn.MouseLeave += (_, _) => { closeBtn.Background = Brushes.Transparent; closeGlyph.Foreground = TextSub; };
+        closeBtn.MouseLeftButtonDown += (_, e) =>
+        {
+            e.Handled = true; // カードの選択処理に流さない
+            CloseWindows(new List<WindowItem> { item });
+        };
+
+        var titleRow = new DockPanel { Width = ThumbWidth, Margin = new Thickness(0, 8, 0, 0), LastChildFill = true };
+        DockPanel.SetDock(mark, Dock.Left);
+        DockPanel.SetDock(closeBtn, Dock.Right);
         titleRow.Children.Add(mark);
+        titleRow.Children.Add(closeBtn);
         titleRow.Children.Add(title);
 
         var sub = new TextBlock
@@ -332,6 +417,25 @@ public partial class MainWindow : Window
         stack.Children.Add(titleRow);
         stack.Children.Add(sub);
 
+        // 位置の記憶・所属グループの表示
+        bool remembered = _rememberedHandles.Contains(item.Handle);
+        _groupsByHandle.TryGetValue(item.Handle, out var groups);
+        if (remembered || groups is { Count: > 0 })
+        {
+            var info = new TextBlock
+            {
+                FontSize = 11,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                MaxWidth = ThumbWidth,
+                Margin = new Thickness(18, 2, 0, 0)
+            };
+            if (remembered)
+                info.Inlines.Add(new System.Windows.Documents.Run("📌 位置記憶　") { Foreground = MemoText });
+            if (groups is { Count: > 0 })
+                info.Inlines.Add(new System.Windows.Documents.Run("▣ " + string.Join("、", groups.Select(g => g.Name))) { Foreground = GroupText });
+            stack.Children.Add(info);
+        }
+
         var root = new Border
         {
             BorderThickness = new Thickness(3),
@@ -344,6 +448,7 @@ public partial class MainWindow : Window
             Child = stack
         };
         root.MouseLeftButtonDown += (_, e) => OnCardClicked(card, e);
+        root.MouseRightButtonUp += (_, e) => OnCardRightClicked(card, e);
 
         card.Root = root;
         card.Host = host;
@@ -425,8 +530,10 @@ public partial class MainWindow : Window
         int n = _cards.Count(c => c.Selected);
         StatusText.Text = n == 0
             ? "クリックで選択、Ctrl+クリックで追加、Shift+クリックで範囲選択。何もない場所からドラッグすると矩形で囲んで一括選択できます。"
-            : $"{n} 件を選択中。上の配置図で移動先モニタをクリックするか、数字キーを押してください。";
+            : $"{n} 件を選択中。配置図の移動先モニタをクリックするか数字キーで移動。右クリックで記憶・グループ・閉じるの操作ができます。";
     }
+
+    private List<WindowItem> SelectedItems() => _cards.Where(c => c.Selected).Select(c => c.Item).ToList();
 
     // ------------------------------------------------------------------ 矩形選択
 
@@ -672,6 +779,375 @@ public partial class MainWindow : Window
         }
     }
 
+    // ------------------------------------------------------------------ 右クリックメニュー
+
+    private void OnCardRightClicked(Card card, MouseButtonEventArgs e)
+    {
+        // 未選択のカードを右クリックしたら、そのカードだけを選択してから操作する（エクスプローラーと同じ）
+        if (!card.Selected)
+        {
+            foreach (var c in _cards) c.Selected = false;
+            card.Selected = true;
+            _anchorIndex = _cards.IndexOf(card);
+            RefreshSelectionVisual();
+        }
+
+        var sel = SelectedItems();
+        var state = StateStore.Current;
+        bool anyRemembered = sel.Any(w => _rememberedHandles.Contains(w.Handle));
+        bool anyInGroup = sel.Any(w => _groupsByHandle.ContainsKey(w.Handle));
+
+        var menu = new ContextMenu();
+        menu.Items.Add(new MenuItem { Header = $"{sel.Count} 件を選択中", IsEnabled = false });
+        menu.Items.Add(new Separator());
+        menu.Items.Add(MakeItem("位置を記憶", "Ctrl+S", RememberSelected));
+        menu.Items.Add(MakeItem("記憶した位置に戻す", "Ctrl+R", RestoreSelected, anyRemembered || anyInGroup));
+        menu.Items.Add(MakeItem("位置の記憶を解除", null, ForgetSelected, anyRemembered));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(MakeItem("新しいグループを作成…", "Ctrl+G", CreateGroupFromSelection));
+
+        var addTo = new MenuItem { Header = "グループに追加", IsEnabled = state.Groups.Count > 0 };
+        foreach (var g in state.Groups)
+        {
+            var group = g;
+            addTo.Items.Add(MakeItem(group.Name, null, () => AddSelectedToGroup(group)));
+        }
+        menu.Items.Add(addTo);
+
+        var removeFrom = new MenuItem { Header = "グループから外す", IsEnabled = anyInGroup };
+        foreach (var g in state.Groups.Where(g => sel.Any(w => _groupsByHandle.TryGetValue(w.Handle, out var l) && l.Contains(g))))
+        {
+            var group = g;
+            removeFrom.Items.Add(MakeItem(group.Name, null, () => RemoveSelectedFromGroup(group)));
+        }
+        menu.Items.Add(removeFrom);
+
+        menu.Items.Add(new Separator());
+        menu.Items.Add(MakeItem("閉じる…", "Del", () => CloseWindows(SelectedItems())));
+
+        menu.PlacementTarget = card.Root;
+        menu.IsOpen = true;
+        e.Handled = true;
+    }
+
+    private static MenuItem MakeItem(string header, string? gesture, Action action, bool enabled = true)
+    {
+        var mi = new MenuItem { Header = header, InputGestureText = gesture ?? "", IsEnabled = enabled };
+        mi.Click += (_, _) => action();
+        return mi;
+    }
+
+    // ------------------------------------------------------------------ グループバー
+
+    private void BuildGroupBar()
+    {
+        GroupPanel.Children.Clear();
+        var groups = StateStore.Current.Groups;
+
+        if (groups.Count == 0)
+        {
+            GroupPanel.Children.Add(GroupHint);
+            return;
+        }
+
+        GroupPanel.Children.Add(new TextBlock
+        {
+            Text = "グループ",
+            Foreground = TextSub,
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(2, 0, 10, 0)
+        });
+
+        foreach (var g in groups)
+        {
+            var group = g;
+            int present = _groupPresent.TryGetValue(g, out var p) ? p.Count : 0;
+
+            var matched = WindowMatcher.Match(g.Members, _windows);
+            var tip = string.Join("\n", g.Members.Select(m =>
+                matched.ContainsKey(m) ? $"● {m.Signature.Title}" : $"○ {m.Signature.Title}（閉じています）"));
+
+            var chip = new Border
+            {
+                Background = ChipBg,
+                BorderBrush = ChipBorder,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(12),
+                Padding = new Thickness(12, 4, 12, 4),
+                Margin = new Thickness(0, 2, 8, 2),
+                Cursor = Cursors.Hand,
+                ToolTip = $"{g.Name}（{present} / {g.Members.Count} 件が開いています）\n{tip}\n\nクリックで選択、右クリックでメニュー",
+                Child = new TextBlock
+                {
+                    Text = $"{g.Name}  {present}/{g.Members.Count}",
+                    Foreground = present > 0 ? TextMain : TextSub,
+                    FontSize = 12.5
+                }
+            };
+            chip.MouseEnter += (_, _) => chip.BorderBrush = ChipBorderHover;
+            chip.MouseLeave += (_, _) => chip.BorderBrush = ChipBorder;
+            chip.MouseLeftButtonDown += (_, e) =>
+            {
+                SelectGroup(group, (Keyboard.Modifiers & ModifierKeys.Control) != 0);
+                e.Handled = true;
+            };
+            chip.MouseRightButtonUp += (_, e) =>
+            {
+                ShowGroupMenu(group, chip);
+                e.Handled = true;
+            };
+            GroupPanel.Children.Add(chip);
+        }
+    }
+
+    /// <summary>グループのうち、いま開いているウィンドウを選択する（その後は数字キー等でまとめて移動できる）。</summary>
+    private void SelectGroup(WindowGroup g, bool additive)
+    {
+        var handles = (_groupPresent.TryGetValue(g, out var p) ? p : new List<WindowItem>())
+            .Select(w => w.Handle).ToHashSet();
+
+        if (handles.Count == 0)
+        {
+            StatusText.Text = $"「{g.Name}」のウィンドウは、いまひとつも開いていません。";
+            return;
+        }
+
+        // 検索で隠れているメンバーがいたら絞り込みを解除する
+        if (handles.Any(h => _cards.All(c => c.Item.Handle != h)))
+            SearchBox.Text = "";
+
+        foreach (var c in _cards)
+        {
+            if (handles.Contains(c.Item.Handle)) c.Selected = true;
+            else if (!additive) c.Selected = false;
+        }
+        _anchorIndex = -1;
+        RefreshSelectionVisual();
+    }
+
+    private void ShowGroupMenu(WindowGroup g, FrameworkElement anchor)
+    {
+        bool hasSelection = _cards.Any(c => c.Selected);
+        int present = _groupPresent.TryGetValue(g, out var p) ? p.Count : 0;
+
+        var menu = new ContextMenu();
+        menu.Items.Add(new MenuItem { Header = $"{g.Name}（{present} / {g.Members.Count} 件が開いています）", IsEnabled = false });
+        menu.Items.Add(new Separator());
+        menu.Items.Add(MakeItem("このグループを選択", null, () => SelectGroup(g, false), present > 0));
+        menu.Items.Add(MakeItem("記憶した配置に戻す", null, () => RestoreGroup(g), present > 0));
+        menu.Items.Add(MakeItem("今の配置で記憶し直す", null, () => RecaptureGroup(g), present > 0));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(MakeItem("選択中のウィンドウを追加", null, () => AddSelectedToGroup(g), hasSelection));
+        menu.Items.Add(MakeItem("選択中のウィンドウを外す", null, () => RemoveSelectedFromGroup(g), hasSelection));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(MakeItem("名前を変更…", null, () => RenameGroup(g)));
+        menu.Items.Add(MakeItem("グループを削除…", null, () => DeleteGroup(g)));
+
+        menu.PlacementTarget = anchor;
+        menu.IsOpen = true;
+    }
+
+    // ------------------------------------------------------------------ グループ操作
+
+    private void CreateGroupFromSelection()
+    {
+        var sel = SelectedItems();
+        if (sel.Count == 0)
+        {
+            StatusText.Text = "グループにするウィンドウを選択してください。";
+            return;
+        }
+
+        var state = StateStore.Current;
+        string? name = WithModal(() => InputDialog.Ask(this, "新しいグループ",
+            $"選択中の {sel.Count} 件でグループを作ります。グループ名：", $"グループ{state.Groups.Count + 1}"));
+        if (name == null) return;
+
+        var g = new WindowGroup { Name = name };
+        state.Groups.Add(g);
+        MemoryService.AddToGroup(g, sel, _monitors);
+        RefreshAfterMemoryChange();
+        StatusText.Text = $"グループ「{name}」を作成し、{sel.Count} 件の今の配置を記憶しました。";
+    }
+
+    private void AddSelectedToGroup(WindowGroup g)
+    {
+        var sel = SelectedItems();
+        if (sel.Count == 0) return;
+        MemoryService.AddToGroup(g, sel, _monitors);
+        RefreshAfterMemoryChange();
+        StatusText.Text = $"{sel.Count} 件をグループ「{g.Name}」に追加し、今の配置を記憶しました。";
+    }
+
+    private void RemoveSelectedFromGroup(WindowGroup g)
+    {
+        var sel = SelectedItems();
+        if (sel.Count == 0) return;
+        MemoryService.RemoveFromGroup(g, sel);
+        RefreshAfterMemoryChange();
+        StatusText.Text = $"選択中のウィンドウをグループ「{g.Name}」から外しました。";
+    }
+
+    private void RecaptureGroup(WindowGroup g)
+    {
+        int n = MemoryService.RecaptureGroup(g, _windows, _monitors);
+        RefreshAfterMemoryChange();
+        StatusText.Text = $"グループ「{g.Name}」の {n} 件について、今の配置を記憶し直しました（閉じているメンバーは前回の記憶のままです）。";
+    }
+
+    private void RenameGroup(WindowGroup g)
+    {
+        string? name = WithModal(() => InputDialog.Ask(this, "グループ名の変更", "新しいグループ名：", g.Name));
+        if (name == null) return;
+        g.Name = name;
+        StateStore.Save();
+        RefreshAfterMemoryChange();
+    }
+
+    private void DeleteGroup(WindowGroup g)
+    {
+        var r = WithModal(() => MessageBox.Show(this,
+            $"グループ「{g.Name}」を削除します。よろしいですか？\n（ウィンドウ自体は閉じません。記憶していた配置は消えます）",
+            "グループの削除", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No));
+        if (r != MessageBoxResult.Yes) return;
+
+        StateStore.Current.Groups.Remove(g);
+        StateStore.Save();
+        RefreshAfterMemoryChange();
+        StatusText.Text = $"グループ「{g.Name}」を削除しました。";
+    }
+
+    // ------------------------------------------------------------------ 位置の記憶
+
+    private void RememberSelected()
+    {
+        var sel = SelectedItems();
+        if (sel.Count == 0)
+        {
+            StatusText.Text = "位置を記憶するウィンドウを選択してください。";
+            return;
+        }
+        int n = MemoryService.RememberWindows(sel, _monitors);
+        RefreshAfterMemoryChange();
+        StatusText.Text = $"{n} 件のウィンドウの今の位置を記憶しました。モニタを抜き差ししても、このモニタが戻れば自動で元の位置に戻ります。";
+    }
+
+    private void ForgetSelected()
+    {
+        int n = MemoryService.ForgetWindows(SelectedItems());
+        RefreshAfterMemoryChange();
+        StatusText.Text = $"{n} 件のウィンドウの位置の記憶を解除しました（グループの記憶はそのままです）。";
+    }
+
+    private void RestoreSelected()
+    {
+        var handles = SelectedItems().Select(w => w.Handle).ToHashSet();
+        if (handles.Count == 0)
+        {
+            StatusText.Text = "記憶した位置に戻すウィンドウを選択してください。";
+            return;
+        }
+        var targets = MemoryService.Resolve(_windows).Values.Where(t => handles.Contains(t.Window.Handle)).ToList();
+        if (targets.Count == 0)
+        {
+            StatusText.Text = "選択中のウィンドウには、記憶した位置がありません。";
+            return;
+        }
+        RunRestore(targets);
+    }
+
+    private void RestoreGroup(WindowGroup g)
+    {
+        var targets = WindowMatcher.Match(g.Members, _windows).Select(kv => (kv.Key, kv.Value)).ToList();
+        if (targets.Count == 0) return;
+        RunRestore(targets);
+    }
+
+    private void RunRestore(List<(SavedWindow Entry, WindowItem Window)> targets)
+    {
+        // 移動と同様、サムネイルを解除し自分を隠してから動かす
+        _timer?.Stop();
+        ClearThumbnails();
+        Hide();
+
+        var (ok, skipped, failed) = MemoryService.RestoreTargets(targets, _monitors);
+        Close();
+
+        if (skipped > 0 || failed.Count > 0)
+        {
+            string msg = $"{ok} 件を記憶した位置に戻しました。";
+            if (skipped > 0) msg += $"\n\n記憶したときのモニタが今は接続されていないため、{skipped} 件は戻していません。";
+            if (failed.Count > 0)
+                msg += $"\n\n次の {failed.Count} 件は戻せませんでした。\n" + string.Join("\n", failed.Take(10))
+                       + "\n\n管理者権限で動作しているアプリのウィンドウは、WindowMover 自身も管理者として実行しないと動かせません。";
+            MessageBox.Show(msg, "WindowMover", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    // ------------------------------------------------------------------ ウィンドウを閉じる
+
+    private void CloseWindows(List<WindowItem> targets)
+    {
+        if (targets.Count == 0)
+        {
+            StatusText.Text = "閉じるウィンドウを選択してください。";
+            return;
+        }
+
+        string list = string.Join("\n", targets.Take(10).Select(w => $"・{w.Title}（{w.ProcessName}）"))
+                      + (targets.Count > 10 ? $"\n…ほか {targets.Count - 10} 件" : "");
+        var answer = WithModal(() => MessageBox.Show(this,
+            $"次の {targets.Count} 件のウィンドウを閉じます。よろしいですか？\n\n{list}\n\n"
+            + "保存していない内容があるアプリは、アプリ側で保存の確認が表示されます。",
+            "ウィンドウを閉じる", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No));
+        if (answer != MessageBoxResult.Yes) return;
+
+        // 強制終了ではなく、タイトルバーの × を押したのと同じ WM_CLOSE を送る
+        var failed = new List<WindowItem>();
+        foreach (var w in targets)
+            if (Native.IsWindow(w.Handle) && !Native.PostMessage(w.Handle, Native.WM_CLOSE, IntPtr.Zero, IntPtr.Zero))
+                failed.Add(w);
+
+        StatusText.Text = "ウィンドウを閉じています…";
+
+        // 少し待ってから結果を確認する。残っているウィンドウは保存確認などを出している可能性が高いので、
+        // 最前面のこのパネルがそれを隠さないよう、パネルを閉じる
+        var check = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
+        check.Tick += (_, _) =>
+        {
+            check.Stop();
+            if (_isClosed) return;
+
+            var remaining = targets.Where(w => !failed.Contains(w) && Native.IsWindow(w.Handle) && Native.IsWindowVisible(w.Handle)).ToList();
+            int closed = targets.Count - failed.Count - remaining.Count;
+
+            if (failed.Count > 0)
+                WithModal(() => MessageBox.Show(this,
+                    $"次の {failed.Count} 件は閉じられませんでした。\n"
+                    + string.Join("\n", failed.Take(10).Select(w => $"・{w.Title}（{w.ProcessName}）"))
+                    + "\n\n管理者権限で動作しているアプリのウィンドウは、WindowMover 自身も管理者として実行しないと閉じられません。",
+                    "WindowMover", MessageBoxButton.OK, MessageBoxImage.Warning));
+
+            if (remaining.Count > 0)
+            {
+                Close();
+                return;
+            }
+
+            ReloadAll();
+            StatusText.Text = $"{closed} 件のウィンドウを閉じました。";
+        };
+        check.Start();
+    }
+
+    private T WithModal<T>(Func<T> show)
+    {
+        _modalDepth++;
+        try { return show(); }
+        finally { _modalDepth--; }
+    }
+
     // ------------------------------------------------------------------ キー操作
 
     protected override void OnPreviewKeyDown(KeyEventArgs e)
@@ -696,6 +1172,31 @@ public partial class MainWindow : Window
         if (e.Key == Key.A && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
         {
             SelectAll();
+            e.Handled = true;
+            return;
+        }
+
+        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
+        {
+            Action? action = e.Key switch
+            {
+                Key.G => CreateGroupFromSelection,
+                Key.S => RememberSelected,
+                Key.R => RestoreSelected,
+                _ => null
+            };
+            if (action != null)
+            {
+                action();
+                e.Handled = true;
+                return;
+            }
+        }
+
+        // Delete は検索ボックス入力中は文字の削除に使う
+        if (e.Key == Key.Delete && !inSearch)
+        {
+            CloseWindows(SelectedItems());
             e.Handled = true;
             return;
         }
@@ -732,6 +1233,7 @@ public partial class MainWindow : Window
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        _isClosed = true;
         _timer?.Stop();
         _timer = null;
         ClearThumbnails();

@@ -6,6 +6,13 @@ internal sealed class WindowItem
     public IntPtr Handle { get; init; }
     public string Title { get; init; } = "";
     public string ProcessName { get; init; } = "";
+
+    /// <summary>実行ファイルのフルパス（取得できなければ空）。再起動後のウィンドウ照合に使う。</summary>
+    public string ExePath { get; init; } = "";
+
+    /// <summary>ウィンドウクラス名。再起動後のウィンドウ照合に使う。</summary>
+    public string ClassName { get; init; } = "";
+
     public bool IsMinimized { get; init; }
     public bool IsMaximized { get; init; }
     public IntPtr IconHandle { get; init; }

@@ -178,6 +178,28 @@ internal static class Native
     [DllImport("user32.dll", EntryPoint = "GetClassLongPtrW")]
     public static extern IntPtr GetClassLongPtr(IntPtr hWnd, int nIndex);
 
+    // --- ウィンドウを閉じる -----------------------------------------------
+    public const int WM_CLOSE = 0x0010;
+
+    [DllImport("user32.dll", SetLastError = true, EntryPoint = "PostMessageW")]
+    public static extern bool PostMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
+
+    // --- 配置の復元 --------------------------------------------------------
+    public const int SW_SHOWMINNOACTIVE = 7;
+    public const int WPF_RESTORETOMAXIMIZED = 0x0002;
+
+    // --- プロセスの実行ファイルパス ---------------------------------------
+    public const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "QueryFullProcessImageNameW")]
+    public static extern bool QueryFullProcessImageName(IntPtr hProcess, int dwFlags, StringBuilder lpExeName, ref int lpdwSize);
+
+    [DllImport("kernel32.dll")]
+    public static extern bool CloseHandle(IntPtr hObject);
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetMonitorInfoW")]
     public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEX lpmi);
 
