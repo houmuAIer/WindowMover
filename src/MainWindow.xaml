@@ -45,11 +45,34 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource FlatButton}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="b" CornerRadius="5"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="b" Property="Background" Value="#FFB3363B"/>
+                                <Setter TargetName="b" Property="BorderBrush" Value="#FFD9585C"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <Border BorderBrush="#FF3C3C46" BorderThickness="1">
         <Grid>
             <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
                 <RowDefinition Height="Auto"/>
@@ -81,8 +104,32 @@
                 </StackPanel>
             </Grid>
 
+            <!-- グループと操作バー -->
+            <Grid Grid.Row="1" Background="#FF1F1F25">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <WrapPanel x:Name="GroupPanel" Grid.Column="0" Margin="16,8,8,8" VerticalAlignment="Center">
+                    <TextBlock x:Name="GroupHint" Text="グループ：なし（ウィンドウを選んで「グループ化」）"
+                               Foreground="#FF9A9AA8" FontSize="12" VerticalAlignment="Center" Margin="2,6"/>
+                </WrapPanel>
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="8,8,14,8" VerticalAlignment="Center">
+                    <Button x:Name="GroupButton" Content="グループ化 (Ctrl+G)" Style="{StaticResource FlatButton}"
+                            ToolTip="選択中のウィンドウで新しいグループを作り、今の配置を記憶します"/>
+                    <Button x:Name="RememberButton" Content="位置を記憶 (Ctrl+S)" Style="{StaticResource FlatButton}"
+                            ToolTip="選択中のウィンドウの今の位置を、ウィンドウごとに記憶します"/>
+                    <Button x:Name="RestoreButton" Content="記憶位置に戻す (Ctrl+R)" Style="{StaticResource FlatButton}"
+                            ToolTip="選択中のウィンドウを記憶した位置に戻します"/>
+                    <Button x:Name="CloseSelectedButton" Content="選択を閉じる (Del)" Style="{StaticResource DangerButton}" Margin="0"
+                            ToolTip="選択中のウィンドウを閉じます（確認あり）"/>
+                </StackPanel>
+            </Grid>
+
             <!-- ウィンドウ一覧（矩形選択のオーバーレイを重ねる） -->
-            <Grid Grid.Row="1">
+            <Grid Grid.Row="2">
                 <ScrollViewer x:Name="Scroller"
                               VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                               Background="#FF1B1B1F" Focusable="False">
@@ -97,7 +144,7 @@
             </Grid>
 
             <!-- フッター（モニタ配置図） -->
-            <Grid Grid.Row="2" Background="#FF232329">
+            <Grid Grid.Row="3" Background="#FF232329">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>

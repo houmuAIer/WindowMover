@@ -77,6 +77,7 @@ internal static class WindowEnumerator
         uint myPid = (uint)Environment.ProcessId;
         IntPtr shell = Native.GetShellWindow();
         var sb = new StringBuilder(512);
+        var exeCache = new Dictionary<uint, string>();
 
         Native.EnumWindows((hWnd, _) =>
         {
@@ -127,6 +128,16 @@ internal static class WindowEnumerator
             try { proc = Process.GetProcessById((int)pid).ProcessName; }
             catch { /* アクセスできないプロセスは名前なしで続行 */ }
 
+            if (!exeCache.TryGetValue(pid, out string? exe))
+            {
+                exe = GetExePath(pid);
+                exeCache[pid] = exe;
+            }
+
+            sb.Clear();
+            Native.GetClassName(hWnd, sb, sb.Capacity);
+            string cls = sb.ToString();
+
             IntPtr mon = minimized
                 ? Native.MonitorFromRect(ref rect, Native.MONITOR_DEFAULTTONEAREST)
                 : Native.MonitorFromWindow(hWnd, Native.MONITOR_DEFAULTTONEAREST);
@@ -136,6 +147,8 @@ internal static class WindowEnumerator
                 Handle = hWnd,
                 Title = title,
                 ProcessName = proc,
+                ExePath = exe,
+                ClassName = cls,
                 IsMinimized = minimized,
                 IsMaximized = Native.IsZoomed(hWnd),
                 IconHandle = minimized ? GetWindowIcon(hWnd) : IntPtr.Zero,
@@ -151,6 +164,23 @@ internal static class WindowEnumerator
             .ThenBy(w => w.ProcessName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(w => w.Title, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    /// <summary>プロセスの実行ファイルのフルパスを返す（昇格プロセス等で取れなければ空文字）。</summary>
+    private static string GetExePath(uint pid)
+    {
+        IntPtr h = Native.OpenProcess(Native.PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+        if (h == IntPtr.Zero) return "";
+        try
+        {
+            var buf = new StringBuilder(1024);
+            int size = buf.Capacity;
+            return Native.QueryFullProcessImageName(h, 0, buf, ref size) ? buf.ToString(0, size) : "";
+        }
+        finally
+        {
+            Native.CloseHandle(h);
+        }
     }
 
     /// <summary>最小化中のカードに出すためのアプリアイコンを取得する（取れなければ IntPtr.Zero）。</summary>

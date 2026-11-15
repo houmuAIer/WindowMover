@@ -3,7 +3,7 @@
 ; 事前に src フォルダで dotnet publish を実行し、単一ファイルの WindowMover.exe を作っておくこと。
 
 #define MyAppName "WindowMover"
-#define MyAppVersion "1.0.1"
+#define MyAppVersion "1.1.0"
 #define MyAppPublisher "WindowMover"
 #define MyAppExeName "WindowMover.exe"
 #define MyPublishDir "..\src\bin\Release\net8.0-windows\win-x64\publish"
