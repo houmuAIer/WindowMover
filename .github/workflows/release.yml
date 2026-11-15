@@ -1,0 +1,56 @@
+# リリースを公開すると、Windows 上で単一 exe とインストーラーを作り、そのリリースに添付する。
+# 手動実行（Actions タブの Run workflow）でも作れる。その場合は成果物を Artifacts として保存する。
+name: Build installer
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish single-file exe
+        working-directory: src
+        run: >
+          dotnet publish -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        working-directory: installer
+        run: |
+          $iscc = Get-ChildItem "C:\Program Files*\Inno Setup*\ISCC.exe" -ErrorAction Stop | Select-Object -First 1
+          & $iscc.FullName WindowMover.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed: $LASTEXITCODE" }
+          Get-ChildItem Output
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: WindowMover
+          path: |
+            installer/Output/*.exe
+            src/bin/Release/net8.0-windows/win-x64/publish/WindowMover.exe
+
+      - name: Attach installer to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          files: installer/Output/*.exe

@@ -97,6 +97,10 @@ installer\Output\WindowMoverSetup-1.1.0.exe
 
 この exe を実行すると Program Files にインストールされ、スタートメニューと（既定で）スタートアップにショートカットが作成されます。アンインストールは「アプリと機能」から行えます。
 
+### GitHub Actions で作る場合
+
+GitHub でリリースを公開すると、`.github/workflows/release.yml` が Windows 上で単一 exe とインストーラーを作り、そのリリースに `WindowMoverSetup-<バージョン>.exe` を添付します。リリース前に `src\WindowMover.csproj` の `Version` と `installer\WindowMover.iss` の `MyAppVersion` をそろえて更新してください。
+
 ---
 
 ## 6. 使い方
