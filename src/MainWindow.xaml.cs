@@ -978,7 +978,7 @@ public partial class MainWindow : Window
             StatusText.Text = "記憶した位置に戻すウィンドウを選択してください。";
             return;
         }
-        var targets = MemoryService.Resolve(_windows).Values.Where(t => handles.Contains(t.Window.Handle)).ToList();
+        var targets = MemoryService.Resolve(_windows, _monitors).Values.Where(t => handles.Contains(t.Window.Handle)).ToList();
         if (targets.Count == 0)
         {
             StatusText.Text = "選択中のウィンドウには、記憶した位置がありません。";

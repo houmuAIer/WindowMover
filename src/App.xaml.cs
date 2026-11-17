@@ -101,7 +101,7 @@ public partial class App : Application
         _picker?.Close();
 
         var windows = WindowEnumerator.Enumerate(monitors);
-        var targets = MemoryService.Resolve(windows).Values;
+        var targets = MemoryService.Resolve(windows, monitors).Values;
         var (ok, _, _) = MemoryService.RestoreTargets(targets, monitors, appeared);
 
         if (ok > 0 && _tray != null)
@@ -113,7 +113,7 @@ public partial class App : Application
         _picker?.Close();
         var monitors = MonitorService.Enumerate();
         var windows = WindowEnumerator.Enumerate(monitors);
-        var targets = MemoryService.Resolve(windows).Values;
+        var targets = MemoryService.Resolve(windows, monitors).Values;
         var (ok, skipped, failed) = MemoryService.RestoreTargets(targets, monitors);
 
         string msg = $"{ok} 件のウィンドウを記憶した位置に戻しました。";

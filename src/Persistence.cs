@@ -421,23 +421,35 @@ internal static class MemoryService
     }
 
     /// <summary>
-    /// 各ウィンドウに適用する記憶を決める。ウィンドウ単位の記憶を優先し、
-    /// 無ければ、そのウィンドウを含むグループのうち最後に記憶したものを使う。
+    /// 各ウィンドウに適用する記憶を決める。ウィンドウ単位の記憶（位置を記憶）とグループの記憶
+    /// （現在の配置を記憶する）のうち、記憶したモニタがいま接続されているものの中で最も新しいものを使う。
+    /// どれも接続されていなければ最も新しいものを返す（戻す処理で「モニタなし」として数える）。
     /// </summary>
     public static Dictionary<IntPtr, (SavedWindow Entry, WindowItem Window)> Resolve(
-        IReadOnlyList<WindowItem> current, IEnumerable<WindowGroup>? onlyGroups = null, bool includeWindows = true)
+        IReadOnlyList<WindowItem> current, List<MonitorItem> monitors)
     {
         var state = StateStore.Current;
+        var candidates = new Dictionary<IntPtr, List<(SavedWindow Entry, WindowItem Window)>>();
+
+        void Add(IEnumerable<SavedWindow> saved)
+        {
+            foreach (var (s, w) in WindowMatcher.Match(saved, current))
+            {
+                if (!candidates.TryGetValue(w.Handle, out var list))
+                    candidates[w.Handle] = list = new();
+                list.Add((s, w));
+            }
+        }
+
+        Add(state.Windows);
+        foreach (var g in state.Groups) Add(g.Members);
+
         var result = new Dictionary<IntPtr, (SavedWindow, WindowItem)>();
-
-        if (includeWindows)
-            foreach (var (s, w) in WindowMatcher.Match(state.Windows, current))
-                result[w.Handle] = (s, w);
-
-        foreach (var g in (onlyGroups ?? state.Groups).OrderByDescending(g => g.SavedAt))
-            foreach (var (s, w) in WindowMatcher.Match(g.Members, current))
-                result.TryAdd(w.Handle, (s, w));
-
+        foreach (var (handle, list) in candidates)
+        {
+            var ordered = list.OrderByDescending(c => c.Entry.SavedAt).ToList();
+            result[handle] = ordered.FirstOrDefault(c => PlacementService.IsMonitorPresent(c.Entry.Placement, monitors), ordered[0]);
+        }
         return result;
     }
 
