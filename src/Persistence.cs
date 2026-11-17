@@ -64,6 +64,8 @@ internal sealed class WindowGroup
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public string Name { get; set; } = "";
+    /// <summary>利用者が名前を変更したか。「現在の配置を記憶する」で作り直しても、同じモニタならこの名前を引き継ぐ。</summary>
+    public bool CustomName { get; set; }
     public List<SavedWindow> Members { get; set; } = new();
     public DateTime SavedAt { get; set; }
 }
@@ -403,7 +405,12 @@ internal static class MemoryService
 
         foreach (var m in monitors.OrderBy(m => m.DisplayNumber).ThenBy(m => m.Index))
         {
-            var g = new WindowGroup { Name = m.Label, SavedAt = now };
+            // 名前を変更済みのグループが同じモニタのものなら、その名前を引き継ぐ
+            var renamed = state.Groups.FirstOrDefault(old => old.CustomName
+                && old.Members.Any(s => PlacementService.SameRect(s.Placement.MonitorBounds, m.Bounds, 0)));
+            var g = renamed != null
+                ? new WindowGroup { Name = renamed.Name, CustomName = true, SavedAt = now }
+                : new WindowGroup { Name = m.Label, SavedAt = now };
             foreach (var w in current.Where(w => w.Monitor == m.Handle))
             {
                 var p = PlacementService.Capture(w.Handle, monitors);

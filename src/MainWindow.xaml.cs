@@ -858,7 +858,7 @@ public partial class MainWindow : Window
                 Padding = new Thickness(12, 4, 12, 4),
                 Margin = new Thickness(0, 2, 8, 2),
                 Cursor = Cursors.Hand,
-                ToolTip = $"{g.Name}（{present} / {g.Members.Count} 件が開いています）\n{tip}\n\nクリックで選択、右クリックでメニュー",
+                ToolTip = $"{g.Name}（{present} / {g.Members.Count} 件が開いています）\n{tip}\n\nクリックで選択、ダブルクリックで名前を変更、右クリックでメニュー",
                 Child = new TextBlock
                 {
                     Text = $"{g.Name}  {present}/{g.Members.Count}",
@@ -870,7 +870,11 @@ public partial class MainWindow : Window
             chip.MouseLeave += (_, _) => chip.BorderBrush = ChipBorder;
             chip.MouseLeftButtonDown += (_, e) =>
             {
-                SelectGroup(group, (Keyboard.Modifiers & ModifierKeys.Control) != 0);
+                if (_renameBox != null && Equals(chip.Child, _renameBox)) return; // 編集中はテキストボックスに任せる
+                if (e.ClickCount == 2)
+                    BeginRenameGroup(group, chip);
+                else
+                    SelectGroup(group, (Keyboard.Modifiers & ModifierKeys.Control) != 0);
                 e.Handled = true;
             };
             chip.MouseRightButtonUp += (_, e) =>
@@ -904,7 +908,86 @@ public partial class MainWindow : Window
             else if (!additive) c.Selected = false;
         }
         _anchorIndex = -1;
+        MoveSelectedCardsToTop();
         RefreshSelectionVisual();
+    }
+
+    /// <summary>選択中のカードを一覧の先頭に並べ替え、先頭までスクロールする（それぞれの順序は保つ）。</summary>
+    private void MoveSelectedCardsToTop()
+    {
+        var ordered = _cards.Where(c => c.Selected).Concat(_cards.Where(c => !c.Selected)).ToList();
+        _cards.Clear();
+        _cards.AddRange(ordered);
+
+        CardPanel.Children.Clear();
+        foreach (var c in _cards) CardPanel.Children.Add(c.Root);
+        Scroller.ScrollToTop();
+    }
+
+    // ------------------------------------------------------------------ グループ名の変更
+
+    private TextBox? _renameBox;
+
+    /// <summary>グループのチップをその場でテキストボックスに切り替えて名前を編集する。</summary>
+    private void BeginRenameGroup(WindowGroup g, Border chip)
+    {
+        if (_renameBox != null) return;
+
+        var original = chip.Child;
+        var box = new TextBox
+        {
+            Text = g.Name,
+            MinWidth = 120,
+            FontSize = 12.5,
+            Padding = new Thickness(2, 0, 2, 0),
+            Background = CardBg,
+            Foreground = TextMain,
+            CaretBrush = TextMain,
+            BorderThickness = new Thickness(0),
+            VerticalContentAlignment = VerticalAlignment.Center
+        };
+        _renameBox = box;
+        chip.Child = box;
+        chip.ToolTip = null;
+        StatusText.Text = "グループの新しい名前を入力して Enter で確定、Esc で取り消します。";
+
+        bool done = false;
+        void Finish(bool commit)
+        {
+            if (done) return;
+            done = true;
+            _renameBox = null;
+
+            string name = box.Text.Trim();
+            if (commit && name.Length > 0 && name != g.Name)
+            {
+                g.Name = name;
+                g.CustomName = true;
+                StateStore.Save();
+                RefreshAfterMemoryChange();
+                StatusText.Text = $"グループの名前を「{name}」に変更しました。";
+            }
+            else
+            {
+                chip.Child = original;
+                BuildGroupBar();
+                UpdateStatus();
+            }
+        }
+
+        box.Tag = (Action<bool>)Finish;
+        box.LostKeyboardFocus += (_, _) => Finish(true);
+        box.Loaded += (_, _) =>
+        {
+            box.Focus();
+            box.SelectAll();
+        };
+    }
+
+    /// <summary>名前の編集を終える（commit=false なら取り消し）。</summary>
+    private void EndRenameGroup(bool commit)
+    {
+        if (_renameBox?.Tag is Action<bool> finish) finish(commit);
     }
 
     private void ShowGroupMenu(WindowGroup g, FrameworkElement anchor)
@@ -916,6 +999,8 @@ public partial class MainWindow : Window
         menu.Items.Add(new Separator());
         menu.Items.Add(MakeItem("このグループを選択", null, () => SelectGroup(g, false), present > 0));
         menu.Items.Add(MakeItem("記憶した配置に戻す", null, () => RestoreGroup(g), present > 0));
+        if (anchor is Border chipBorder)
+            menu.Items.Add(MakeItem("名前を変更", null, () => BeginRenameGroup(g, chipBorder)));
         menu.Items.Add(new Separator());
         menu.Items.Add(MakeItem("グループを削除…", null, () => DeleteGroup(g)));
 
@@ -1080,9 +1165,38 @@ public partial class MainWindow : Window
 
     // ------------------------------------------------------------------ キー操作
 
+    protected override void OnPreviewMouseDown(MouseButtonEventArgs e)
+    {
+        // グループ名の編集中に別の場所をクリックしたら、入力した名前で確定する
+        // （カードなどはフォーカスを持たないため、LostKeyboardFocus だけでは拾えない）
+        if (_renameBox != null && e.OriginalSource is DependencyObject d && !IsWithin(d, _renameBox))
+            EndRenameGroup(true);
+        base.OnPreviewMouseDown(e);
+    }
+
+    private static bool IsWithin(DependencyObject d, DependencyObject ancestor)
+    {
+        for (var cur = d; cur != null; cur = cur is Visual || cur is System.Windows.Media.Media3D.Visual3D
+                 ? VisualTreeHelper.GetParent(cur) : LogicalTreeHelper.GetParent(cur))
+            if (Equals(cur, ancestor)) return true;
+        return false;
+    }
+
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
         base.OnPreviewKeyDown(e);
+
+        // グループ名の編集中は、Enter で確定・Esc で取り消し、それ以外のキーはテキストボックスに渡す
+        if (_renameBox != null && Equals(e.OriginalSource, _renameBox))
+        {
+            if (e.Key == Key.Enter || e.Key == Key.Escape)
+            {
+                EndRenameGroup(e.Key == Key.Enter);
+                e.Handled = true;
+            }
+            return;
+        }
+
         bool inSearch = Equals(e.OriginalSource, SearchBox);
 
         if (e.Key == Key.Escape)
