@@ -91,7 +91,7 @@ GUI で行う場合は `WindowMover.iss` をダブルクリックして Inno Set
 生成物：
 
 ```
-installer\Output\WindowMoverSetup-1.1.0.exe
+installer\Output\WindowMoverSetup-2.0.0.exe
 ```
 
 この exe を実行すると Program Files にインストールされ、スタートメニューと（既定で）スタートアップにショートカットが作成されます。アンインストールは「アプリと機能」から行えます。
