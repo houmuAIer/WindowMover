@@ -112,13 +112,13 @@
                 </Grid.ColumnDefinitions>
 
                 <WrapPanel x:Name="GroupPanel" Grid.Column="0" Margin="16,8,8,8" VerticalAlignment="Center">
-                    <TextBlock x:Name="GroupHint" Text="グループ：なし（ウィンドウを選んで「グループ化」）"
+                    <TextBlock x:Name="GroupHint" Text="グループ：なし（「現在の配置を記憶する」でモニタごとに作成）"
                                Foreground="#FF9A9AA8" FontSize="12" VerticalAlignment="Center" Margin="2,6"/>
                 </WrapPanel>
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="8,8,14,8" VerticalAlignment="Center">
-                    <Button x:Name="GroupButton" Content="グループ化 (Ctrl+G)" Style="{StaticResource FlatButton}"
-                            ToolTip="選択中のウィンドウで新しいグループを作り、今の配置を記憶します"/>
+                    <Button x:Name="SnapshotButton" Content="現在の配置を記憶する (Ctrl+G)" Style="{StaticResource FlatButton}"
+                            ToolTip="開いているウィンドウを、表示中のモニタごとにグループにまとめ直して今の配置を記憶します（以前のグループは置き換えます）"/>
                     <Button x:Name="RememberButton" Content="位置を記憶 (Ctrl+S)" Style="{StaticResource FlatButton}"
                             ToolTip="選択中のウィンドウの今の位置を、ウィンドウごとに記憶します"/>
                     <Button x:Name="RestoreButton" Content="記憶位置に戻す (Ctrl+R)" Style="{StaticResource FlatButton}"

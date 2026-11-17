@@ -390,52 +390,34 @@ internal static class MemoryService
         return matched.Count;
     }
 
-    /// <summary>グループにウィンドウを加える（既にメンバーなら配置だけ記憶し直す）。</summary>
-    public static void AddToGroup(WindowGroup g, IEnumerable<WindowItem> windows, List<MonitorItem> monitors)
+    /// <summary>
+    /// 現在の配置を記憶する。それまでのグループをすべて破棄し、いま開いているウィンドウを
+    /// 表示中のモニタごとに1グループとして作り直す。作成したグループ数とウィンドウ数を返す。
+    /// </summary>
+    public static (int Groups, int Windows) SnapshotByMonitor(IReadOnlyList<WindowItem> current, List<MonitorItem> monitors)
     {
-        var list = windows.ToList();
-        var existing = WindowMatcher.Match(g.Members, list).ToDictionary(kv => kv.Value.Handle, kv => kv.Key);
-        foreach (var w in list)
-        {
-            var p = PlacementService.Capture(w.Handle, monitors);
-            if (p == null) continue;
-            if (existing.TryGetValue(w.Handle, out var m))
-            {
-                m.Signature = WindowSignature.From(w);
-                m.Placement = p;
-                m.SavedAt = DateTime.Now;
-            }
-            else
-            {
-                g.Members.Add(new SavedWindow { Signature = WindowSignature.From(w), Placement = p, SavedAt = DateTime.Now });
-            }
-        }
-        g.SavedAt = DateTime.Now;
-        StateStore.Save();
-    }
-
-    public static void RemoveFromGroup(WindowGroup g, IEnumerable<WindowItem> windows)
-    {
-        foreach (var m in WindowMatcher.Match(g.Members, windows.ToList()).Keys) g.Members.Remove(m);
-        StateStore.Save();
-    }
-
-    /// <summary>グループのうち、いま開いているメンバーの配置を記憶し直す（閉じているメンバーは前回の記憶を残す）。</summary>
-    public static int RecaptureGroup(WindowGroup g, IReadOnlyList<WindowItem> current, List<MonitorItem> monitors)
-    {
+        var state = StateStore.Current;
+        var now = DateTime.Now;
+        var groups = new List<WindowGroup>();
         int n = 0;
-        foreach (var (m, w) in WindowMatcher.Match(g.Members, current))
+
+        foreach (var m in monitors.OrderBy(m => m.DisplayNumber).ThenBy(m => m.Index))
         {
-            var p = PlacementService.Capture(w.Handle, monitors);
-            if (p == null) continue;
-            m.Signature = WindowSignature.From(w);
-            m.Placement = p;
-            m.SavedAt = DateTime.Now;
-            n++;
+            var g = new WindowGroup { Name = m.Label, SavedAt = now };
+            foreach (var w in current.Where(w => w.Monitor == m.Handle))
+            {
+                var p = PlacementService.Capture(w.Handle, monitors);
+                if (p == null) continue;
+                g.Members.Add(new SavedWindow { Signature = WindowSignature.From(w), Placement = p, SavedAt = now });
+            }
+            if (g.Members.Count == 0) continue;
+            groups.Add(g);
+            n += g.Members.Count;
         }
-        g.SavedAt = DateTime.Now;
+
+        state.Groups = groups;
         StateStore.Save();
-        return n;
+        return (groups.Count, n);
     }
 
     /// <summary>

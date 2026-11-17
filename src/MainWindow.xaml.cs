@@ -78,7 +78,7 @@ public partial class MainWindow : Window
         SelectAllButton.Click += (_, _) => SelectAll();
         RefreshButton.Click += (_, _) => ReloadAll();
         CloseButton.Click += (_, _) => Close();
-        GroupButton.Click += (_, _) => CreateGroupFromSelection();
+        SnapshotButton.Click += (_, _) => SnapshotLayout();
         RememberButton.Click += (_, _) => RememberSelected();
         RestoreButton.Click += (_, _) => RestoreSelected();
         CloseSelectedButton.Click += (_, _) => CloseWindows(SelectedItems());
@@ -530,7 +530,7 @@ public partial class MainWindow : Window
         int n = _cards.Count(c => c.Selected);
         StatusText.Text = n == 0
             ? "クリックで選択、Ctrl+クリックで追加、Shift+クリックで範囲選択。何もない場所からドラッグすると矩形で囲んで一括選択できます。"
-            : $"{n} 件を選択中。配置図の移動先モニタをクリックするか数字キーで移動。右クリックで記憶・グループ・閉じるの操作ができます。";
+            : $"{n} 件を選択中。配置図の移動先モニタをクリックするか数字キーで移動。右クリックで位置の記憶・閉じるの操作ができます。";
     }
 
     private List<WindowItem> SelectedItems() => _cards.Where(c => c.Selected).Select(c => c.Item).ToList();
@@ -793,7 +793,6 @@ public partial class MainWindow : Window
         }
 
         var sel = SelectedItems();
-        var state = StateStore.Current;
         bool anyRemembered = sel.Any(w => _rememberedHandles.Contains(w.Handle));
         bool anyInGroup = sel.Any(w => _groupsByHandle.ContainsKey(w.Handle));
 
@@ -803,24 +802,6 @@ public partial class MainWindow : Window
         menu.Items.Add(MakeItem("位置を記憶", "Ctrl+S", RememberSelected));
         menu.Items.Add(MakeItem("記憶した位置に戻す", "Ctrl+R", RestoreSelected, anyRemembered || anyInGroup));
         menu.Items.Add(MakeItem("位置の記憶を解除", null, ForgetSelected, anyRemembered));
-        menu.Items.Add(new Separator());
-        menu.Items.Add(MakeItem("新しいグループを作成…", "Ctrl+G", CreateGroupFromSelection));
-
-        var addTo = new MenuItem { Header = "グループに追加", IsEnabled = state.Groups.Count > 0 };
-        foreach (var g in state.Groups)
-        {
-            var group = g;
-            addTo.Items.Add(MakeItem(group.Name, null, () => AddSelectedToGroup(group)));
-        }
-        menu.Items.Add(addTo);
-
-        var removeFrom = new MenuItem { Header = "グループから外す", IsEnabled = anyInGroup };
-        foreach (var g in state.Groups.Where(g => sel.Any(w => _groupsByHandle.TryGetValue(w.Handle, out var l) && l.Contains(g))))
-        {
-            var group = g;
-            removeFrom.Items.Add(MakeItem(group.Name, null, () => RemoveSelectedFromGroup(group)));
-        }
-        menu.Items.Add(removeFrom);
 
         menu.Items.Add(new Separator());
         menu.Items.Add(MakeItem("閉じる…", "Del", () => CloseWindows(SelectedItems())));
@@ -928,7 +909,6 @@ public partial class MainWindow : Window
 
     private void ShowGroupMenu(WindowGroup g, FrameworkElement anchor)
     {
-        bool hasSelection = _cards.Any(c => c.Selected);
         int present = _groupPresent.TryGetValue(g, out var p) ? p.Count : 0;
 
         var menu = new ContextMenu();
@@ -936,12 +916,7 @@ public partial class MainWindow : Window
         menu.Items.Add(new Separator());
         menu.Items.Add(MakeItem("このグループを選択", null, () => SelectGroup(g, false), present > 0));
         menu.Items.Add(MakeItem("記憶した配置に戻す", null, () => RestoreGroup(g), present > 0));
-        menu.Items.Add(MakeItem("今の配置で記憶し直す", null, () => RecaptureGroup(g), present > 0));
         menu.Items.Add(new Separator());
-        menu.Items.Add(MakeItem("選択中のウィンドウを追加", null, () => AddSelectedToGroup(g), hasSelection));
-        menu.Items.Add(MakeItem("選択中のウィンドウを外す", null, () => RemoveSelectedFromGroup(g), hasSelection));
-        menu.Items.Add(new Separator());
-        menu.Items.Add(MakeItem("名前を変更…", null, () => RenameGroup(g)));
         menu.Items.Add(MakeItem("グループを削除…", null, () => DeleteGroup(g)));
 
         menu.PlacementTarget = anchor;
@@ -950,59 +925,14 @@ public partial class MainWindow : Window
 
     // ------------------------------------------------------------------ グループ操作
 
-    private void CreateGroupFromSelection()
+    /// <summary>現在の配置を記憶する（押すたびに、モニタごとのグループを作り直す）。</summary>
+    private void SnapshotLayout()
     {
-        var sel = SelectedItems();
-        if (sel.Count == 0)
-        {
-            StatusText.Text = "グループにするウィンドウを選択してください。";
-            return;
-        }
-
-        var state = StateStore.Current;
-        string? name = WithModal(() => InputDialog.Ask(this, "新しいグループ",
-            $"選択中の {sel.Count} 件でグループを作ります。グループ名：", $"グループ{state.Groups.Count + 1}"));
-        if (name == null) return;
-
-        var g = new WindowGroup { Name = name };
-        state.Groups.Add(g);
-        MemoryService.AddToGroup(g, sel, _monitors);
+        var (groups, windows) = MemoryService.SnapshotByMonitor(_windows, _monitors);
         RefreshAfterMemoryChange();
-        StatusText.Text = $"グループ「{name}」を作成し、{sel.Count} 件の今の配置を記憶しました。";
-    }
-
-    private void AddSelectedToGroup(WindowGroup g)
-    {
-        var sel = SelectedItems();
-        if (sel.Count == 0) return;
-        MemoryService.AddToGroup(g, sel, _monitors);
-        RefreshAfterMemoryChange();
-        StatusText.Text = $"{sel.Count} 件をグループ「{g.Name}」に追加し、今の配置を記憶しました。";
-    }
-
-    private void RemoveSelectedFromGroup(WindowGroup g)
-    {
-        var sel = SelectedItems();
-        if (sel.Count == 0) return;
-        MemoryService.RemoveFromGroup(g, sel);
-        RefreshAfterMemoryChange();
-        StatusText.Text = $"選択中のウィンドウをグループ「{g.Name}」から外しました。";
-    }
-
-    private void RecaptureGroup(WindowGroup g)
-    {
-        int n = MemoryService.RecaptureGroup(g, _windows, _monitors);
-        RefreshAfterMemoryChange();
-        StatusText.Text = $"グループ「{g.Name}」の {n} 件について、今の配置を記憶し直しました（閉じているメンバーは前回の記憶のままです）。";
-    }
-
-    private void RenameGroup(WindowGroup g)
-    {
-        string? name = WithModal(() => InputDialog.Ask(this, "グループ名の変更", "新しいグループ名：", g.Name));
-        if (name == null) return;
-        g.Name = name;
-        StateStore.Save();
-        RefreshAfterMemoryChange();
+        StatusText.Text = windows == 0
+            ? "記憶できるウィンドウがありませんでした。"
+            : $"現在の配置を記憶しました（{groups} 台のモニタ、{windows} 件のウィンドウ）。以前のグループは置き換えました。";
     }
 
     private void DeleteGroup(WindowGroup g)
@@ -1180,7 +1110,7 @@ public partial class MainWindow : Window
         {
             Action? action = e.Key switch
             {
-                Key.G => CreateGroupFromSelection,
+                Key.G => SnapshotLayout,
                 Key.S => RememberSelected,
                 Key.R => RestoreSelected,
                 _ => null
