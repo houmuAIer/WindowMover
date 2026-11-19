@@ -31,6 +31,10 @@ public partial class MainWindow : Window
     private static readonly Brush ChipBg = new SolidColorBrush(Color.FromRgb(0x24, 0x36, 0x2F));
     private static readonly Brush ChipBorder = new SolidColorBrush(Color.FromRgb(0x3F, 0x6B, 0x57));
     private static readonly Brush ChipBorderHover = new SolidColorBrush(Color.FromRgb(0x7F, 0xD1, 0xAE));
+    private static readonly Brush FocusBorder = new SolidColorBrush(Color.FromRgb(0xFF, 0xD1, 0x66));
+    private static readonly Brush SectionBg = new SolidColorBrush(Color.FromRgb(0x22, 0x22, 0x28));
+    private static readonly Brush SectionBgHover = new SolidColorBrush(Color.FromRgb(0x2C, 0x2C, 0x34));
+    private static readonly Brush SectionLine = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x44));
     private static readonly Brush CloseHover = new SolidColorBrush(Color.FromRgb(0xD9, 0x58, 0x5C));
 
     private sealed class Card
@@ -65,6 +69,16 @@ public partial class MainWindow : Window
     private HashSet<IntPtr> _rememberedHandles = new();
     private readonly Dictionary<IntPtr, List<WindowGroup>> _groupsByHandle = new();
     private readonly Dictionary<WindowGroup, List<WindowItem>> _groupPresent = new();
+
+    // 一覧のまとめ表示
+    /// <summary>未選択で配置図のモニタをクリックしたとき、そのモニタのウィンドウを上にまとめて出す。</summary>
+    private IntPtr _focusMonitor = IntPtr.Zero;
+    /// <summary>展開中のグループ（Id）。グループは既定でたたんで表示する。</summary>
+    private readonly HashSet<string> _expandedGroups = new();
+    /// <summary>グループ名のクリックで選んだグループ（Id）。新しく選んだものほど前。一覧の先頭に出す。</summary>
+    private readonly List<string> _priorityGroups = new();
+    /// <summary>セクションごとのカード置き場。並べ直す前にカードを外すために保持する。</summary>
+    private readonly List<Panel> _sectionPanels = new();
 
     /// <summary>確認ダイアログ等を表示中は、フォーカスが外れても自動で閉じない。</summary>
     private int _modalDepth;
@@ -266,10 +280,10 @@ public partial class MainWindow : Window
             };
 
             box.MouseEnter += (s, _) => ((Border)s).BorderBrush = MonBorderHover;
-            box.MouseLeave += (s, _) => ((Border)s).BorderBrush = MonBorder;
+            box.MouseLeave += (s, _) => UpdateMonitorFocusVisual();
             box.MouseLeftButtonDown += (s, e) =>
             {
-                MoveSelected((MonitorItem)((Border)s).Tag!);
+                OnMonitorClicked((MonitorItem)((Border)s).Tag!);
                 e.Handled = true;
             };
 
@@ -280,6 +294,48 @@ public partial class MainWindow : Window
         }
 
         UpdateMonitorBadges();
+        UpdateMonitorFocusVisual();
+    }
+
+    /// <summary>
+    /// 配置図のモニタのクリック。選択中のウィンドウがあればそのモニタへ移動し、
+    /// 無ければそのモニタにあるウィンドウを一覧の上にまとめて表示する（もう一度クリックで元に戻す）。
+    /// </summary>
+    private void OnMonitorClicked(MonitorItem m)
+    {
+        if (_cards.Any(c => c.Selected))
+        {
+            MoveSelected(m);
+            return;
+        }
+        FocusMonitor(m);
+    }
+
+    private void FocusMonitor(MonitorItem m)
+    {
+        _focusMonitor = _focusMonitor == m.Handle ? IntPtr.Zero : m.Handle;
+        _priorityGroups.Clear();
+        LayoutCards();
+        Scroller.ScrollToTop();
+        UpdateMonitorFocusVisual();
+
+        if (_focusMonitor == IntPtr.Zero)
+        {
+            UpdateStatus();
+            return;
+        }
+        int all = _cards.Count(c => c.Item.Monitor == m.Handle);
+        int loose = _cards.Count(c => c.Item.Monitor == m.Handle && !_groupsByHandle.ContainsKey(c.Item.Handle));
+        StatusText.Text = $"{m.Label} にある {all} 件を上に表示しました（グループ未所属 {loose} 件）。"
+                          + "もう一度モニタをクリックすると元の表示に戻ります。";
+    }
+
+    /// <summary>まとめ表示中のモニタを配置図で強調する。</summary>
+    private void UpdateMonitorFocusVisual()
+    {
+        foreach (var (m, box, _) in _monitorBoxes)
+            box.BorderBrush = m.Handle == _focusMonitor ? FocusBorder
+                : box.IsMouseOver ? MonBorderHover : MonBorder;
     }
 
     /// <summary>選択中のウィンドウが今どのモニタにあるかを配置図に表示する。</summary>
@@ -300,7 +356,7 @@ public partial class MainWindow : Window
         var keep = _cards.Where(c => c.Selected).Select(c => c.Item.Handle).ToHashSet();
 
         ClearThumbnails();
-        CardPanel.Children.Clear();
+        DetachCards();
         _cards.Clear();
         _anchorIndex = -1;
 
@@ -316,8 +372,8 @@ public partial class MainWindow : Window
             var card = CreateCard(item);
             card.Selected = keep.Contains(item.Handle);
             _cards.Add(card);
-            CardPanel.Children.Add(card.Root);
         }
+        LayoutCards();
 
         CountText.Text = $"{shown.Count} / {_windows.Count} ウィンドウ";
         RegisterThumbnails();
@@ -468,6 +524,207 @@ public partial class MainWindow : Window
         return card;
     }
 
+    // ------------------------------------------------------------------ 一覧のまとめ表示
+
+    /// <summary>各セクションからカードを外す（カードは別のセクションに付け直すため）。</summary>
+    private void DetachCards()
+    {
+        foreach (var p in _sectionPanels) p.Children.Clear();
+        _sectionPanels.Clear();
+        CardPanel.Children.Clear();
+    }
+
+    /// <summary>ウィンドウが属するグループのうち、最も新しく記憶したもの（無ければ null）。</summary>
+    private WindowGroup? PrimaryGroup(WindowItem w)
+        => _groupsByHandle.TryGetValue(w.Handle, out var gs) && gs.Count > 0
+            ? gs.OrderByDescending(g => g.SavedAt).First()
+            : null;
+
+    /// <summary>
+    /// カードをセクションに分けて並べる。グループごとにたたんで表示し、グループ未所属のウィンドウは
+    /// 別にまとめる。モニタのまとめ表示中は、そのモニタのウィンドウを先頭に出す。
+    /// _cards も表示順に並べ直す（Shift+クリックの範囲選択を見た目どおりにするため）。
+    /// </summary>
+    private void LayoutCards()
+    {
+        DetachCards();
+        var ordered = new List<Card>();
+        var monitor = _monitors.FirstOrDefault(m => m.Handle == _focusMonitor);
+        if (monitor == null) _focusMonitor = IntPtr.Zero;
+
+        if (monitor != null)
+        {
+            var here = _cards.Where(c => c.Item.Monitor == monitor.Handle).ToList();
+            var rest = _cards.Where(c => c.Item.Monitor != monitor.Handle).ToList();
+
+            AddHeading($"{monitor.Label} にあるウィンドウ（{here.Count} 件）", first: true);
+            AddSections(here, ordered, $"{monitor.Label} のグループ未所属");
+            if (rest.Count > 0)
+            {
+                AddHeading($"そのほかのモニタ（{rest.Count} 件）", first: false);
+                AddSections(rest, ordered, "グループ未所属");
+            }
+        }
+        else
+        {
+            AddSections(_cards, ordered, "グループ未所属");
+        }
+
+        _cards.Clear();
+        _cards.AddRange(ordered);
+        _anchorIndex = -1;
+        Dispatcher.BeginInvoke(UpdateThumbnails, DispatcherPriority.Loaded);
+    }
+
+    /// <summary>選んだグループ → 未所属 → そのほかのグループの順に、セクションを作る。</summary>
+    private void AddSections(List<Card> cards, List<Card> ordered, string looseTitle)
+    {
+        var groups = StateStore.Current.Groups;
+        var byGroup = cards.GroupBy(c => PrimaryGroup(c.Item)).ToList();
+
+        var priority = byGroup.Where(x => x.Key != null && _priorityGroups.Contains(x.Key.Id))
+            .OrderBy(x => _priorityGroups.IndexOf(x.Key!.Id)).ToList();
+        foreach (var x in priority)
+            AddGroupSection(x.Key!, x.ToList(), ordered);
+
+        var loose = byGroup.FirstOrDefault(x => x.Key == null)?.ToList();
+        if (loose is { Count: > 0 })
+            AddSection(key: null, title: $"{looseTitle}（{loose.Count} 件）", titleBrush: TextMain,
+                tooltip: "「現在の配置を記憶する」の後に開いた、どのグループにも入っていないウィンドウ",
+                cards: loose, collapsible: false, ordered: ordered);
+
+        foreach (var g in groups)
+        {
+            if (_priorityGroups.Contains(g.Id)) continue;
+            var list = byGroup.FirstOrDefault(x => x.Key == g)?.ToList();
+            if (list is { Count: > 0 }) AddGroupSection(g, list, ordered);
+        }
+    }
+
+    private void AddGroupSection(WindowGroup g, List<Card> cards, List<Card> ordered)
+        => AddSection(key: g.Id, title: $"▣ {g.Name}（{cards.Count} 件）", titleBrush: GroupText,
+            tooltip: string.Join("\n", cards.Select(c => c.Item.Title)),
+            cards: cards, collapsible: true, ordered: ordered);
+
+    /// <summary>見出し＋カード置き場のセクションを1つ追加する。collapsible なら見出しのクリックで開閉する。</summary>
+    private void AddSection(string? key, string title, Brush titleBrush, string tooltip,
+        List<Card> cards, bool collapsible, List<Card> ordered)
+    {
+        bool expanded = !collapsible || _expandedGroups.Contains(key!);
+
+        var arrow = new TextBlock
+        {
+            Text = collapsible ? (expanded ? "▼" : "▶") : "",
+            Foreground = TextSub,
+            FontSize = 11,
+            Width = collapsible ? 18 : 0,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        var label = new TextBlock
+        {
+            Text = title,
+            Foreground = titleBrush,
+            FontSize = 13,
+            FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+
+        var selectBtn = new Button
+        {
+            Content = $"この {cards.Count} 件を選択",
+            Padding = new Thickness(10, 2, 10, 2),
+            Margin = new Thickness(12, 0, 0, 0),
+            FontSize = 11.5,
+            Focusable = false,
+            VerticalAlignment = VerticalAlignment.Center,
+            ToolTip = "Ctrl を押しながらクリックすると、今の選択に追加します"
+        };
+        selectBtn.Click += (_, _) => SelectCards(cards, (Keyboard.Modifiers & ModifierKeys.Control) != 0);
+
+        var headerRow = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(arrow, Dock.Left);
+        DockPanel.SetDock(selectBtn, Dock.Right);
+        headerRow.Children.Add(arrow);
+        headerRow.Children.Add(selectBtn);
+        headerRow.Children.Add(label);
+
+        var header = new Border
+        {
+            Background = SectionBg,
+            BorderBrush = SectionLine,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(10, 5, 8, 5),
+            Margin = new Thickness(7, 6, 7, 2),
+            Cursor = collapsible ? Cursors.Hand : Cursors.Arrow,
+            ToolTip = collapsible ? $"クリックで{(expanded ? "たたむ" : "展開")}\n\n{tooltip}" : tooltip,
+            Child = headerRow
+        };
+
+        var wrap = new WrapPanel { Orientation = Orientation.Horizontal };
+        foreach (var c in cards)
+        {
+            wrap.Children.Add(c.Root);
+            ordered.Add(c);
+        }
+        wrap.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
+        _sectionPanels.Add(wrap);
+
+        header.MouseLeftButtonDown += (_, e) =>
+        {
+            e.Handled = true; // 矩形選択を始めない
+            if (!collapsible) return;
+            bool open = wrap.Visibility != Visibility.Visible;
+            wrap.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+            arrow.Text = open ? "▼" : "▶";
+            header.ToolTip = $"クリックで{(open ? "たたむ" : "展開")}\n\n{tooltip}";
+            if (open) _expandedGroups.Add(key!); else _expandedGroups.Remove(key!);
+            if (!open)
+                foreach (var c in cards) c.Selected = false; // 見えない所に選択を残さない
+            RefreshSelectionVisual();
+            Dispatcher.BeginInvoke(UpdateThumbnails, DispatcherPriority.Loaded);
+        };
+        if (collapsible)
+        {
+            header.MouseEnter += (_, _) => header.Background = SectionBgHover;
+            header.MouseLeave += (_, _) => header.Background = SectionBg;
+        }
+
+        CardPanel.Children.Add(header);
+        CardPanel.Children.Add(wrap);
+    }
+
+    /// <summary>モニタのまとめ表示の大見出し。</summary>
+    private void AddHeading(string text, bool first)
+    {
+        CardPanel.Children.Add(new TextBlock
+        {
+            Text = text,
+            Foreground = first ? FocusBorder : TextSub,
+            FontSize = 14,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(8, first ? 2 : 18, 8, 2)
+        });
+    }
+
+    /// <summary>セクションのカードをまとめて選択する（たたんでいれば展開する）。</summary>
+    private void SelectCards(List<Card> cards, bool additive)
+    {
+        if (!additive)
+            foreach (var c in _cards) c.Selected = false;
+        foreach (var c in cards) c.Selected = true;
+
+        // たたんだグループの中を選んだときは展開して見えるようにする
+        bool hidden = cards.Any(c => !c.Root.IsVisible);
+        foreach (var g in cards.Select(c => PrimaryGroup(c.Item)).Where(g => g != null).Distinct())
+            _expandedGroups.Add(g!.Id);
+        if (hidden) LayoutCards();
+
+        _anchorIndex = -1;
+        RefreshSelectionVisual();
+    }
+
     // ------------------------------------------------------------------ 選択
 
     /// <summary>HICON を WPF の画像に変換する（失敗したら null）。アイコンは所有者のものなので破棄しない。</summary>
@@ -499,7 +756,8 @@ public partial class MainWindow : Window
             int to = Math.Max(_anchorIndex, index);
             if (!ctrl)
                 foreach (var c in _cards) c.Selected = false;
-            for (int i = from; i <= to; i++) _cards[i].Selected = true;
+            for (int i = from; i <= to; i++)
+                if (_cards[i].Root.IsVisible) _cards[i].Selected = true; // たたんだグループの中は含めない
         }
         else if (ctrl)
         {
@@ -541,7 +799,7 @@ public partial class MainWindow : Window
     {
         int n = _cards.Count(c => c.Selected);
         StatusText.Text = n == 0
-            ? "クリックで選択、Ctrl+クリックで追加、Shift+クリックで範囲選択。何もない場所からドラッグすると矩形で囲んで一括選択できます。"
+            ? "クリックで選択、Ctrl+クリックで追加、Shift+クリックで範囲選択。ドラッグで囲んで一括選択。未選択のまま配置図のモニタをクリックすると、そのモニタのウィンドウを上にまとめて表示します。"
             : $"{n} 件を選択中。配置図の移動先モニタをクリックするか数字キーで移動。右クリックで位置の記憶・閉じるの操作ができます。";
     }
 
@@ -596,8 +854,8 @@ public partial class MainWindow : Window
 
         foreach (var c in _cards)
         {
-            Rect bounds = CardBoundsInPanel(c);
-            bool hit = bounds.IntersectsWith(sel);
+            Rect bounds = c.Root.IsVisible ? CardBoundsInPanel(c) : Rect.Empty;
+            bool hit = !bounds.IsEmpty && bounds.IntersectsWith(sel);
             c.Selected = hit || _dragBaseSelection.Contains(c);
         }
         RefreshSelectionVisual();
@@ -920,20 +1178,17 @@ public partial class MainWindow : Window
             else if (!additive) c.Selected = false;
         }
         _anchorIndex = -1;
-        MoveSelectedCardsToTop();
-        RefreshSelectionVisual();
-    }
 
-    /// <summary>選択中のカードを一覧の先頭に並べ替え、先頭までスクロールする（それぞれの順序は保つ）。</summary>
-    private void MoveSelectedCardsToTop()
-    {
-        var ordered = _cards.Where(c => c.Selected).Concat(_cards.Where(c => !c.Selected)).ToList();
-        _cards.Clear();
-        _cards.AddRange(ordered);
-
-        CardPanel.Children.Clear();
-        foreach (var c in _cards) CardPanel.Children.Add(c.Root);
+        // 選んだグループを展開して一覧の先頭に出す
+        if (!additive) _priorityGroups.Clear();
+        _priorityGroups.Remove(g.Id);
+        _priorityGroups.Insert(0, g.Id);
+        _expandedGroups.Add(g.Id);
+        _focusMonitor = IntPtr.Zero;
+        LayoutCards();
         Scroller.ScrollToTop();
+        RefreshSelectionVisual();
+        UpdateMonitorFocusVisual();
     }
 
     // ------------------------------------------------------------------ グループ名の変更
@@ -1273,7 +1528,7 @@ public partial class MainWindow : Window
                 var target = _monitors.FirstOrDefault(m => m.DisplayNumber == digit);
                 if (target != null)
                 {
-                    MoveSelected(target);
+                    OnMonitorClicked(target);
                     e.Handled = true;
                 }
             }

@@ -133,7 +133,7 @@
                 <ScrollViewer x:Name="Scroller"
                               VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                               Background="#FF1B1B1F" Focusable="False">
-                    <WrapPanel x:Name="CardPanel" Margin="12" Orientation="Horizontal" Background="Transparent"/>
+                    <StackPanel x:Name="CardPanel" Margin="12" Background="Transparent"/>
                 </ScrollViewer>
 
                 <Canvas x:Name="BandLayer" IsHitTestVisible="False" ClipToBounds="True">
