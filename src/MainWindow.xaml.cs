@@ -69,6 +69,17 @@ public partial class MainWindow : Window
     /// <summary>確認ダイアログ等を表示中は、フォーカスが外れても自動で閉じない。</summary>
     private int _modalDepth;
     private bool _isClosed;
+    private bool _isClosing;
+
+    /// <summary>
+    /// 閉じている途中・閉じた後でなければ閉じる。閉じる途中でフォーカスが外れると Deactivated から
+    /// もう一度 Close() が呼ばれ、WPF が例外を出してアプリごと終了してしまうのを防ぐ。
+    /// </summary>
+    public void CloseIfOpen()
+    {
+        if (_isClosing || _isClosed) return;
+        Close();
+    }
 
     public MainWindow()
     {
@@ -77,7 +88,7 @@ public partial class MainWindow : Window
         SearchBox.TextChanged += (_, _) => BuildCards();
         SelectAllButton.Click += (_, _) => SelectAll();
         RefreshButton.Click += (_, _) => ReloadAll();
-        CloseButton.Click += (_, _) => Close();
+        CloseButton.Click += (_, _) => CloseIfOpen();
         SnapshotButton.Click += (_, _) => SnapshotLayout();
         RememberButton.Click += (_, _) => RememberSelected();
         RestoreButton.Click += (_, _) => RestoreSelected();
@@ -86,8 +97,9 @@ public partial class MainWindow : Window
         SizeChanged += (_, _) => UpdateThumbnails();
         Deactivated += (_, _) =>
         {
-            if (_modalDepth == 0) Close();
+            if (_modalDepth == 0) CloseIfOpen();
         };
+        Closing += (_, _) => _isClosing = true;
         Closed += OnClosed;
 
         Scroller.MouseLeftButtonDown += OnEmptyAreaMouseDown;
@@ -765,7 +777,7 @@ public partial class MainWindow : Window
             else failed.Add($"{w.Title}（{w.ProcessName}）");
         }
 
-        Close();
+        CloseIfOpen();
 
         if (failed.Count > 0)
         {
@@ -1087,7 +1099,7 @@ public partial class MainWindow : Window
         Hide();
 
         var (ok, skipped, failed) = MemoryService.RestoreTargets(targets, _monitors);
-        Close();
+        CloseIfOpen();
 
         if (skipped > 0 || failed.Count > 0)
         {
@@ -1146,7 +1158,7 @@ public partial class MainWindow : Window
 
             if (remaining.Count > 0)
             {
-                Close();
+                CloseIfOpen();
                 return;
             }
 
@@ -1201,7 +1213,7 @@ public partial class MainWindow : Window
 
         if (e.Key == Key.Escape)
         {
-            Close();
+            CloseIfOpen();
             e.Handled = true;
             return;
         }

@@ -12,6 +12,13 @@ public partial class App : Application
     private static readonly IntPtr HWND_MESSAGE = new(-3);
 
     private Mutex? _singleInstance;
+    private const string ShowPanelEventName = @"Local\WindowMover.ShowPanel";
+    private EventWaitHandle? _showPanelEvent;
+    private RegisteredWaitHandle? _showPanelWait;
+
+    private const int ASFW_ANY = -1;
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool AllowSetForegroundWindow(int dwProcessId);
     private HwndSource? _msgWindow;
     private Forms.NotifyIcon? _tray;
     private MainWindow? _picker;
@@ -29,11 +36,28 @@ public partial class App : Application
         _singleInstance = new Mutex(true, @"Local\WindowMover.SingleInstance", out bool isNew);
         if (!isNew)
         {
-            MessageBox.Show("WindowMover はすでに起動しています。タスクトレイのアイコンをご確認ください。",
-                "WindowMover", MessageBoxButton.OK, MessageBoxImage.Information);
+            // すでに起動している場合は、起動中の WindowMover にパネルを開くよう伝えて終わる
+            // （タスクバーやスタートメニューから起動したときに、そのままパネルが開くようにする）
+            bool signaled = false;
+            try
+            {
+                using var ev = EventWaitHandle.OpenExisting(ShowPanelEventName);
+                AllowSetForegroundWindow(ASFW_ANY); // 起動中の側がパネルを前面に出せるようにする
+                signaled = ev.Set();
+            }
+            catch (WaitHandleCannotBeOpenedException) { }
+
+            if (!signaled)
+                MessageBox.Show("WindowMover はすでに起動しています。タスクトレイのアイコンをご確認ください。",
+                    "WindowMover", MessageBoxButton.OK, MessageBoxImage.Information);
             Shutdown();
             return;
         }
+
+        // 2回目の起動からの「パネルを開いて」を待ち受ける
+        _showPanelEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowPanelEventName);
+        _showPanelWait = ThreadPool.RegisterWaitForSingleObject(_showPanelEvent,
+            (_, _) => Dispatcher.BeginInvoke(ShowPicker), null, Timeout.Infinite, false);
 
         // メッセージ専用ウィンドウを作り、そこで WM_HOTKEY を受ける
         var parameters = new HwndSourceParameters("WindowMoverHotkeyWindow")
@@ -98,7 +122,7 @@ public partial class App : Application
         if (appeared.Count == 0 || !StateStore.Current.AutoRestore) return;
 
         // パネル表示中ならモニタ構成が変わっているので閉じる
-        _picker?.Close();
+        _picker?.CloseIfOpen();
 
         var windows = WindowEnumerator.Enumerate(monitors);
         var targets = MemoryService.Resolve(windows, monitors).Values;
@@ -110,7 +134,7 @@ public partial class App : Application
 
     private void RestoreAllNow()
     {
-        _picker?.Close();
+        _picker?.CloseIfOpen();
         var monitors = MonitorService.Enumerate();
         var windows = WindowEnumerator.Enumerate(monitors);
         var targets = MemoryService.Resolve(windows, monitors).Values;
@@ -168,7 +192,7 @@ public partial class App : Application
     {
         if (_picker != null)
         {
-            _picker.Close();
+            _picker.CloseIfOpen();
             _picker = null;
             return;
         }
@@ -180,9 +204,21 @@ public partial class App : Application
         Native.SetForegroundWindow(new WindowInteropHelper(_picker).Handle);
     }
 
+    /// <summary>パネルを開く（すでに開いていれば前面に出すだけで、閉じない）。</summary>
+    private void ShowPicker()
+    {
+        if (_picker == null)
+        {
+            TogglePicker();
+            return;
+        }
+        _picker.Activate();
+        Native.SetForegroundWindow(new WindowInteropHelper(_picker).Handle);
+    }
+
     private void ExitApp()
     {
-        _picker?.Close();
+        _picker?.CloseIfOpen();
         Shutdown();
     }
 
@@ -190,6 +226,8 @@ public partial class App : Application
     {
         SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
         _displayDebounce?.Stop();
+        _showPanelWait?.Unregister(null);
+        _showPanelEvent?.Dispose();
 
         if (_msgWindow != null)
         {

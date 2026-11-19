@@ -34,7 +34,7 @@ RestartApplications=no
 Name: "japanese"; MessagesFile: "compiler:Languages\Japanese.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "デスクトップにショートカットを作成する"; GroupDescription: "追加のタスク:"; Flags: unchecked
+Name: "desktopicon"; Description: "デスクトップにショートカットを作成する"; GroupDescription: "追加のタスク:"
 Name: "startupicon"; Description: "Windows へのサインイン時に自動起動する（推奨）"; GroupDescription: "追加のタスク:"
 
 [Files]
